@@ -102,6 +102,15 @@ def configcheck_project_settings():
 
 
 def is_deprecated_setting(setting):
+    """Check if a Celery configuration setting is deprecated.
+    
+    Args:
+        setting (str): The name of the configuration setting to check.
+        
+    Returns:
+        bool or None: The deprecation information if the setting is deprecated,
+                     None if the setting is not found or not deprecated.
+    """
     try:
         return settings[setting].deprecate_by
     except KeyError:
