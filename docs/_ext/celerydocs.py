@@ -68,6 +68,18 @@ def shorten(S, newtarget, src_dict):
 
 
 def get_abbr(pre, rest, type, orig=None):
+    """Resolve abbreviations to their full module paths.
+    
+    Args:
+        pre (str): The prefix part of the abbreviation to look up
+        rest (str): The remaining part after the prefix
+        type (str): The reference type (e.g., 'meth', 'func', 'class')
+        orig (str, optional): Original string for error reporting
+        
+    Returns:
+        tuple: A 3-tuple containing (resolved_target, remaining_part, source_dict)
+               where source_dict is the dictionary where the abbreviation was found
+    """
     if pre:
         for d in APPATTRS, ABBRS:
             try:
