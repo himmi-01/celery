@@ -24,6 +24,12 @@ def read_changes_file(filename):
 
 
 def read_from_clipboard():
+    """Read text content from the system clipboard.
+    
+    Returns:
+        list[str]: A list of strings, where each string represents a line
+                  from the clipboard content.
+    """
     text = pyperclip.paste()
     return text.splitlines()
 
