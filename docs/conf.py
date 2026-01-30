@@ -88,6 +88,14 @@ ignored_settings = {
 
 
 def configcheck_project_settings():
+    """Get all available Celery configuration settings.
+    
+    Flattens the NAMESPACES from celery.app.defaults and updates the global
+    settings dictionary with all available configuration options.
+    
+    Returns:
+        set: A set of all available Celery configuration setting names.
+    """
     from celery.app.defaults import NAMESPACES, flatten
     settings.update(dict(flatten(NAMESPACES)))
     return set(settings)
