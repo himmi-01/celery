@@ -35,6 +35,21 @@ def read_from_clipboard():
 
 
 def process_line(line):
+    """Process a single line from changelog input and transform it if needed.
+    
+    This function filters and transforms changelog lines according to specific rules:
+    - Skips lines containing '[pre-commit.ci]'
+    - Skips lines starting with "## What's Changed"
+    - Returns special marker when "## New Contributors" is encountered
+    - Processes lines starting with '* ' that match the expected pattern
+    
+    Args:
+        line (str): A single line from the changelog input
+        
+    Returns:
+        str or None: Formatted line as "- description (#pr_number)" if processed,
+                    "STOP_PROCESSING" if processing should halt, or None if skipped
+    """
     line = line.strip()
 
     # Skip lines containing '[pre-commit.ci]'
