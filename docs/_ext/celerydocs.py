@@ -52,6 +52,16 @@ DEFAULT_EMPTY = 'celery.Celery'
 
 
 def typeify(S, type):
+    """Format a string representation based on reference type.
+    
+    Args:
+        S (str): The string to format
+        type (str): The reference type (e.g., 'meth', 'func', 'class')
+        
+    Returns:
+        str: The formatted string with '()' appended for methods and functions,
+             or the original string for other types
+    """
     if type in ('meth', 'func'):
         return S + '()'
     return S
