@@ -109,6 +109,20 @@ def get_abbr(pre, rest, type, orig=None):
 
 
 def resolve(S, type):
+    """Resolve string references to their full module paths.
+    
+    This function handles two types of resolution:
+    1. Typing module references - checks if the string is a typing module attribute
+    2. Abbreviation resolution - processes strings starting with '@' to resolve
+       custom abbreviations defined in APPATTRS and ABBRS dictionaries
+    
+    Args:
+        S (str): The string reference to resolve, may start with '@' for abbreviations
+        type (str): The reference type (e.g., 'meth', 'func', 'class')
+        
+    Returns:
+        tuple: A 2-tuple containing (resolved_target, source_dict or None)
+    """
     if '.' not in S:
         try:
             getattr(typing, S)
