@@ -124,6 +124,15 @@ def pkg_of(module_fqdn):
 
 
 def basename(module_fqdn):
+    """Extract the basename from a module's fully qualified domain name.
+    
+    Args:
+        module_fqdn (str): A module's fully qualified domain name, potentially
+                          prefixed with '@' symbols
+                          
+    Returns:
+        str: The last component of the module path after removing '@' prefix
+    """
     return module_fqdn.lstrip('@').rsplit('.', -1)[-1]
 
 
