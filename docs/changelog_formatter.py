@@ -73,32 +73,33 @@ def process_line(line):
     "-c",
     is_flag=True,
     help="Read input from clipboard explicitly.",
-)
-def main(source, dest, clipboard):
-    # Determine the source of input
-    if clipboard or (not source and not sys.stdin.isatty()):
-        # Read from clipboard
-        lines = read_from_clipboard()
-    elif source:
-        # Read from specified file
-        lines = read_changes_file(source)
-    else:
-        # Default: read from clipboard
-        lines = read_from_clipboard()
+    try:
+        # Determine the source of input
+        if clipboard or (not source and not sys.stdin.isatty()):
+            # Read from clipboard
+            lines = read_from_clipboard()
+        elif source:
+            # Read from specified file
+            lines = read_changes_file(source)
+        else:
+            # Default: read from clipboard
+            lines = read_from_clipboard()
 
-    output_lines = []
-    for line in lines:
-        output_line = process_line(line)
-        if output_line == "STOP_PROCESSING":
-            break
-        if output_line:
-            output_lines.append(output_line)
+        output_lines = []
+        for line in lines:
+            output_line = process_line(line)
+            if output_line == "STOP_PROCESSING":
+                break
+            if output_line:
+                output_lines.append(output_line)
 
-    output_text = "\n".join(output_lines)
+        output_text = "\n".join(output_lines)
 
-    # Prepare the header
-    version = "x.y.z"
-    underline = "=" * len(version)
+        # Prepare the header
+        version = "x.y.z"
+        underline = "=" * len(version)
+
+        header = f"""
 
     header = f"""
 .. _version-{version}:
@@ -128,3 +129,33 @@ What's Changed
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+        # Combine header and output
+        final_output = header + output_text
+
+        # Write output to destination
+        if dest.name == "<stdout>":
+            print(Fore.GREEN + "Copy the following text to Changelog.rst:")
+            print(Fore.YELLOW + header)
+            print(Fore.CYAN + output_text)
+        else:
+            try:
+                dest.write(final_output + "\n")
+                dest.close()
+            except (IOError, OSError) as e:
+                print(f"Error: Failed to write to destination file: {e}")
+                sys.exit(1)
+
+    except Exception as e:
+        # Handle clipboard access errors and other unexpected exceptions
+        if "clipboard" in str(e).lower() or "pyperclip" in str(e).lower():
+            print("Error: Unable to access clipboard. Please ensure clipboard functionality is available.")
+        else:
+            print(f"Error: An unexpected error occurred: {e}")
+        sys.exit(1)
+
+
