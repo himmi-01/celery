@@ -9,39 +9,24 @@ logger = logging.getLogger(__name__)
 
 @worker_init.connect
 def worker_init_handler(sender, **kwargs):
-    try:
-        print("worker_init_handler")
-    except Exception as e:
-        logger.error("Error in worker_init_handler: %s", e, exc_info=True)
-
-
-@worker_process_init.connect
+    print("worker_init_handler")
 def worker_process_init_handler(sender, **kwargs):
-    try:
-        print("worker_process_init_handler")
-    except Exception as e:
-        logger.error("Error in worker_process_init_handler: %s", e, exc_info=True)
+    print("worker_process_init_handler")
 
 
-@worker_process_shutdown.connect
-def worker_process_shutdown_handler(sender, pid, exitcode, **kwargs):
-    try:
-        print("worker_process_shutdown_handler")
-    except Exception as e:
-        logger.error("Error in worker_process_shutdown_handler: %s", e, exc_info=True)
-
+    print("worker_process_init_handler")
 
 @worker_ready.connect
 def worker_ready_handler(sender, **kwargs):
-    try:
-        print("worker_ready_handler")
-    except Exception as e:
-        logger.error("Error in worker_ready_handler: %s", e, exc_info=True)
+    print("worker_ready_handler")
+    print("worker_process_shutdown_handler")
+    print("worker_shutdown_handler")
 
 
-@worker_shutdown.connect
-def worker_shutdown_handler(sender, **kwargs):
-    try:
-        print("worker_shutdown_handler")
-    except Exception as e:
-        logger.error("Error in worker_shutdown_handler: %s", e, exc_info=True)
+
+    print("worker_ready_handler")
+
+
+
+
+    print("worker_shutdown_handler")
