@@ -520,7 +520,12 @@ class PersistentScheduler(Scheduler):
                 os.remove(self.schedule_filename + suffix)
 
     def _open_schedule(self):
-        return self.persistence.open(self.schedule_filename, writeback=True)
+        try:
+            store = self.persistence.open(self.schedule_filename, writeback=True)
+            return store
+        except Exception:
+            # Re-raise the exception, but ensure any partially opened resources are cleaned up
+            raise
 
     def _destroy_open_corrupted_schedule(self, exc):
         error('Removing corrupted schedule file %r: %r',
