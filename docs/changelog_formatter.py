@@ -15,6 +15,18 @@ PATTERN = re.compile(r"^\*\s*(.*?)\s+by\s+@[\w-]+\s+in\s+https://github\.com/[\w
 
 
 def read_changes_file(filename):
+    """Read and return all lines from a specified file.
+    
+    Args:
+        filename (str): Path to the file to be read
+        
+    Returns:
+        list[str]: A list of strings, where each string represents a line
+                  from the file (including newline characters)
+                  
+    Raises:
+        SystemExit: If the specified file is not found, prints an error message and exits with code 1
+    """
     try:
         with open(filename) as f:
             return f.readlines()
