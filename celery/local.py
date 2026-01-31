@@ -251,10 +251,18 @@ class Proxy:
         return complex(self._get_current_object())
 
     def __int__(self):
-        return int(self._get_current_object())
+        try:
+            return int(self._get_current_object())
+        except (ValueError, TypeError, RuntimeError) as e:
+            raise TypeError(f"Cannot convert proxy object to int: {e}")
 
     def __float__(self):
-        return float(self._get_current_object())
+        try:
+            return float(self._get_current_object())
+        except (ValueError, TypeError, RuntimeError) as e:
+            raise TypeError(f"Cannot convert proxy object to float: {e}")
+        except OverflowError as e:
+            raise OverflowError(f"Float conversion overflow for proxy object: {e}")
 
     def __oct__(self):
         return oct(self._get_current_object())
