@@ -108,6 +108,20 @@ def process_line(line):
     help="Read input from clipboard explicitly.",
 )
 def main(source, dest, clipboard):
+    """Main entry point for the changelog formatter CLI tool.
+    
+    This function processes changelog input from various sources (file, clipboard, or stdin)
+    and formats it according to the project's changelog standards. It filters out unwanted
+    lines, transforms valid entries, and outputs the result with a proper RST header.
+    
+    Args:
+        source (str, optional): Path to source file to read from. If None, reads from clipboard.
+        dest (file-like object): Destination to write formatted output. Defaults to stdout.
+        clipboard (bool): Flag to explicitly read from clipboard, overriding other sources.
+        
+    Returns:
+        None: Outputs formatted changelog to specified destination or prints to stdout with colors.
+    """
     # Determine the source of input
     if clipboard or (not source and not sys.stdin.isatty()):
         # Read from clipboard
