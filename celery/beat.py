@@ -520,11 +520,23 @@ class PersistentScheduler(Scheduler):
                 os.remove(self.schedule_filename + suffix)
 
     def _open_schedule(self):
+        """Open the schedule database file with proper error handling.
+        
+        Returns:
+            shelve.DbfilenameShelf: The opened schedule database.
+            
+        Raises:
+            OSError: If file cannot be accessed due to permissions or disk issues.
+            dbm.error: If database file is corrupted or incompatible.
+        """
         try:
             store = self.persistence.open(self.schedule_filename, writeback=True)
             return store
-        except Exception:
-            # Re-raise the exception, but ensure any partially opened resources are cleaned up
+        except (OSError, IOError) as exc:
+            error('Failed to open schedule file %r: %s', self.schedule_filename, exc)
+            raise
+        except Exception as exc:
+            error('Unexpected error opening schedule file %r: %s', self.schedule_filename, exc)
             raise
 
     def _destroy_open_corrupted_schedule(self, exc):
