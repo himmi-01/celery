@@ -1,3 +1,684 @@
+"""Unit tests for celery.beat module."""
+
+import copy
+import datetime
+import os
+import shelve
+import tempfile
+import time
+import unittest
+from unittest.mock import Mock, MagicMock, patch, PropertyMock
+
+from celery import Celery
+from celery.beat import (
+    BeatLazyFunc, ScheduleEntry, Scheduler, PersistentScheduler,
+    Service, EmbeddedService, SchedulingError, _Threaded, _Process,
+    _evaluate_entry_args, _evaluate_entry_kwargs
+)
+from celery.schedules import crontab, schedule
+
+
+class TestBeatLazyFunc(unittest.TestCase):
+    """Test BeatLazyFunc class."""
+
+    def test_delay(self):
+        """Test delay method."""
+        mock_func = Mock(return_value="test_result")
+        lazy_func = BeatLazyFunc(mock_func, "arg1", "arg2", kwarg1="value1")
+        
+        result = lazy_func.delay()
+        
+        mock_func.assert_called_once_with("arg1", "arg2", kwarg1="value1")
+        self.assertEqual(result, "test_result")
+
+    def test_call(self):
+        """Test __call__ method."""
+        mock_func = Mock(return_value="test_result")
+        lazy_func = BeatLazyFunc(mock_func, "arg1")
+        
+        result = lazy_func()
+        
+        mock_func.assert_called_once_with("arg1")
+        self.assertEqual(result, "test_result")
+
+
+class TestScheduleEntry(unittest.TestCase):
+    """Test ScheduleEntry class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.app = Celery('test')
+        self.schedule_obj = schedule(run_every=60)
+        
+    def test_default_now(self):
+        """Test default_now method."""
+        entry = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            app=self.app
+        )
+        
+        now = entry.default_now()
+        self.assertIsInstance(now, datetime.datetime)
+
+    def test_update(self):
+        """Test update method."""
+        entry1 = ScheduleEntry(
+            name='test_task',
+            task='test.task1',
+            schedule=self.schedule_obj,
+            args=('arg1',),
+            kwargs={'key1': 'value1'},
+            options={'queue': 'queue1'},
+            app=self.app
+        )
+        
+        entry2 = ScheduleEntry(
+            name='test_task',
+            task='test.task2',
+            schedule=schedule(run_every=120),
+            args=('arg2',),
+            kwargs={'key2': 'value2'},
+            options={'queue': 'queue2'},
+            app=self.app
+        )
+        
+        entry1.update(entry2)
+        
+        self.assertEqual(entry1.task, 'test.task2')
+        self.assertEqual(entry1.args, ('arg2',))
+        self.assertEqual(entry1.kwargs, {'key2': 'value2'})
+        self.assertEqual(entry1.options, {'queue': 'queue2'})
+
+    def test_is_due(self):
+        """Test is_due method."""
+        entry = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            app=self.app
+        )
+        
+        is_due, next_time = entry.is_due()
+        self.assertIsInstance(is_due, bool)
+        self.assertIsInstance(next_time, (int, float))
+
+    def test_editable_fields_equal(self):
+        """Test editable_fields_equal method."""
+        entry1 = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            args=('arg1',),
+            kwargs={'key1': 'value1'},
+            options={'queue': 'queue1'},
+            app=self.app
+        )
+        
+        entry2 = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            args=('arg1',),
+            kwargs={'key1': 'value1'},
+            options={'queue': 'queue1'},
+            app=self.app
+        )
+        
+        self.assertTrue(entry1.editable_fields_equal(entry2))
+        
+        entry2.task = 'different.task'
+        self.assertFalse(entry1.editable_fields_equal(entry2))
+
+
+class TestScheduler(unittest.TestCase):
+    """Test Scheduler class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.app = Celery('test')
+        self.app.conf.beat_schedule = {}
+        self.scheduler = Scheduler(self.app, lazy=True)
+
+    def test_install_default_entries(self):
+        """Test install_default_entries method."""
+        data = {}
+        self.app.conf.result_expires = 3600
+        self.app.backend = Mock()
+        self.app.backend.supports_autoexpire = False
+        
+        self.scheduler.install_default_entries(data)
+        
+        # Should add backend cleanup task
+        self.assertIn('celery.backend_cleanup', self.scheduler.schedule)
+
+    def test_apply_entry(self):
+        """Test apply_entry method."""
+        entry = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            app=self.app
+        )
+        
+        mock_producer = Mock()
+        
+        with patch.object(self.scheduler, 'apply_async') as mock_apply:
+            mock_apply.return_value = Mock(id='task_id')
+            self.scheduler.apply_entry(entry, producer=mock_producer)
+            
+            mock_apply.assert_called_once_with(entry, producer=mock_producer, advance=False)
+
+    def test_adjust(self):
+        """Test adjust method."""
+        result = self.scheduler.adjust(10)
+        self.assertAlmostEqual(result, 9.99, places=2)
+        
+        result = self.scheduler.adjust(0)
+        self.assertEqual(result, 0)
+        
+        result = self.scheduler.adjust(-5)
+        self.assertEqual(result, -5)
+
+    def test_is_due(self):
+        """Test is_due method."""
+        entry = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            app=self.app
+        )
+        
+        result = self.scheduler.is_due(entry)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+
+    def test_populate_heap(self):
+        """Test populate_heap method."""
+        entry = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            app=self.app
+        )
+        
+        self.scheduler.schedule = {'test_task': entry}
+        self.scheduler.populate_heap()
+        
+        self.assertIsNotNone(self.scheduler._heap)
+        self.assertEqual(len(self.scheduler._heap), 1)
+
+    def test_tick(self):
+        """Test tick method."""
+        entry = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            app=self.app
+        )
+        
+        self.scheduler.schedule = {'test_task': entry}
+        self.scheduler.producer = Mock()
+        
+        with patch.object(self.scheduler, 'apply_entry'):
+            result = self.scheduler.tick()
+            
+            self.assertIsInstance(result, (int, float))
+
+    def test_schedules_equal(self):
+        """Test schedules_equal method."""
+        entry1 = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            app=self.app
+        )
+        
+        schedule1 = {'test_task': entry1}
+        schedule2 = {'test_task': entry1}
+        
+        self.assertTrue(self.scheduler.schedules_equal(schedule1, schedule2))
+        
+        schedule2['different_task'] = entry1
+        self.assertFalse(self.scheduler.schedules_equal(schedule1, schedule2))
+
+    def test_should_sync(self):
+        """Test should_sync method."""
+        # First call should return True (no last sync)
+        self.assertTrue(self.scheduler.should_sync())
+        
+        # After setting last sync, should return False
+        self.scheduler._last_sync = time.monotonic()
+        self.assertFalse(self.scheduler.should_sync())
+
+    def test_reserve(self):
+        """Test reserve method."""
+        entry = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            app=self.app
+        )
+        
+        self.scheduler.schedule = {'test_task': entry}
+        
+        new_entry = self.scheduler.reserve(entry)
+        
+        self.assertIsInstance(new_entry, ScheduleEntry)
+        self.assertEqual(new_entry.total_run_count, entry.total_run_count + 1)
+
+    def test_apply_async(self):
+        """Test apply_async method."""
+        entry = ScheduleEntry(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj,
+            app=self.app
+        )
+        
+        self.scheduler.schedule = {'test_task': entry}
+        
+        mock_task = Mock()
+        mock_task.apply_async.return_value = Mock(id='task_id')
+        self.app.tasks = {'test.task': mock_task}
+        
+        with patch.object(self.scheduler, '_do_sync'):
+            result = self.scheduler.apply_async(entry)
+            
+            mock_task.apply_async.assert_called_once()
+            self.assertIsNotNone(result)
+
+    def test_send_task(self):
+        """Test send_task method."""
+        with patch.object(self.app, 'send_task') as mock_send:
+            mock_send.return_value = Mock(id='task_id')
+            
+            result = self.scheduler.send_task('test.task', [], {})
+            
+            mock_send.assert_called_once_with('test.task', [], {})
+            self.assertIsNotNone(result)
+
+    def test_setup_schedule(self):
+        """Test setup_schedule method."""
+        with patch.object(self.scheduler, 'install_default_entries') as mock_install:
+            with patch.object(self.scheduler, 'merge_inplace') as mock_merge:
+                self.scheduler.setup_schedule()
+                
+                mock_install.assert_called_once()
+                mock_merge.assert_called_once()
+
+    def test_sync(self):
+        """Test sync method."""
+        # Base scheduler sync does nothing
+        self.scheduler.sync()
+        # Should not raise any exception
+
+    def test_close(self):
+        """Test close method."""
+        with patch.object(self.scheduler, 'sync') as mock_sync:
+            self.scheduler.close()
+            mock_sync.assert_called_once()
+
+    def test_add(self):
+        """Test add method."""
+        entry = self.scheduler.add(
+            name='test_task',
+            task='test.task',
+            schedule=self.schedule_obj
+        )
+        
+        self.assertIsInstance(entry, ScheduleEntry)
+        self.assertEqual(entry.name, 'test_task')
+        self.assertIn('test_task', self.scheduler.schedule)
+
+    def test_update_from_dict(self):
+        """Test update_from_dict method."""
+        schedule_dict = {
+            'test_task': {
+                'task': 'test.task',
+                'schedule': 60,
+            }
+        }
+        
+        self.scheduler.update_from_dict(schedule_dict)
+        
+        self.assertIn('test_task', self.scheduler.schedule)
+        self.assertIsInstance(self.scheduler.schedule['test_task'], ScheduleEntry)
+
+    def test_merge_inplace(self):
+        """Test merge_inplace method."""
+        # Add existing entry
+        existing_entry = ScheduleEntry(
+            name='existing_task',
+            task='existing.task',
+            schedule=self.schedule_obj,
+            app=self.app
+        )
+        self.scheduler.schedule = {'existing_task': existing_entry}
+        
+        # Merge new schedule
+        new_schedule = {
+            'new_task': {
+                'task': 'new.task',
+                'schedule': 120,
+            }
+        }
+        
+        self.scheduler.merge_inplace(new_schedule)
+        
+        self.assertIn('new_task', self.scheduler.schedule)
+        self.assertNotIn('existing_task', self.scheduler.schedule)
+
+    def test_get_schedule(self):
+        """Test get_schedule method."""
+        test_data = {'test': 'data'}
+        self.scheduler.data = test_data
+        
+        result = self.scheduler.get_schedule()
+        self.assertEqual(result, test_data)
+
+    def test_set_schedule(self):
+        """Test set_schedule method."""
+        test_data = {'test': 'data'}
+        
+        self.scheduler.set_schedule(test_data)
+        self.assertEqual(self.scheduler.data, test_data)
+
+    def test_connection(self):
+        """Test connection property."""
+        with patch.object(self.app, 'connection_for_write') as mock_conn:
+            mock_conn.return_value = Mock()
+            
+            connection = self.scheduler.connection
+            
+            mock_conn.assert_called_once()
+            self.assertIsNotNone(connection)
+
+    def test_producer(self):
+        """Test producer property."""
+        with patch.object(self.scheduler, '_ensure_connected') as mock_ensure:
+            mock_ensure.return_value = Mock()
+            
+            producer = self.scheduler.producer
+            
+            self.assertIsNotNone(producer)
+
+    def test_info(self):
+        """Test info property."""
+        info = self.scheduler.info
+        self.assertEqual(info, '')
+
+
+class TestPersistentScheduler(unittest.TestCase):
+    """Test PersistentScheduler class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.app = Celery('test')
+        self.temp_file = tempfile.NamedTemporaryFile(delete=False)
+        self.temp_file.close()
+        self.scheduler = PersistentScheduler(
+            self.app,
+            schedule_filename=self.temp_file.name,
+            lazy=True
+        )
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        try:
+            os.unlink(self.temp_file.name)
+        except OSError:
+            pass
+        # Clean up any shelve files
+        for suffix in self.scheduler.known_suffixes:
+            try:
+                os.unlink(self.temp_file.name + suffix)
+            except OSError:
+                pass
+
+    def test_setup_schedule(self):
+        """Test setup_schedule method."""
+        with patch.object(self.scheduler, '_open_schedule') as mock_open:
+            mock_store = {}
+            mock_open.return_value = mock_store
+            mock_store.keys = Mock(return_value=[])
+            mock_store.get = Mock(return_value=None)
+            mock_store.setdefault = Mock(return_value={})
+            mock_store.update = Mock()
+            mock_store.sync = Mock()
+            
+            self.scheduler.setup_schedule()
+            
+            mock_open.assert_called()
+
+    def test_get_schedule(self):
+        """Test get_schedule method."""
+        mock_store = {'entries': {'test': 'data'}}
+        self.scheduler._store = mock_store
+        
+        result = self.scheduler.get_schedule()
+        self.assertEqual(result, {'test': 'data'})
+
+    def test_set_schedule(self):
+        """Test set_schedule method."""
+        mock_store = {'entries': {}}
+        self.scheduler._store = mock_store
+        
+        test_schedule = {'test': 'data'}
+        self.scheduler.set_schedule(test_schedule)
+        
+        self.assertEqual(mock_store['entries'], test_schedule)
+
+    def test_sync(self):
+        """Test sync method."""
+        mock_store = Mock()
+        self.scheduler._store = mock_store
+        
+        self.scheduler.sync()
+        
+        mock_store.sync.assert_called_once()
+
+    def test_close(self):
+        """Test close method."""
+        mock_store = Mock()
+        self.scheduler._store = mock_store
+        
+        self.scheduler.close()
+        
+        mock_store.sync.assert_called_once()
+        mock_store.close.assert_called_once()
+
+    def test_info(self):
+        """Test info property."""
+        info = self.scheduler.info
+        self.assertIn(self.temp_file.name, info)
+
+
+class TestService(unittest.TestCase):
+    """Test Service class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.app = Celery('test')
+        self.service = Service(self.app)
+
+    def test_start(self):
+        """Test start method."""
+        with patch.object(self.service, 'scheduler') as mock_scheduler:
+            mock_scheduler.tick.return_value = 0.1
+            mock_scheduler.should_sync.return_value = False
+            
+            # Mock the shutdown event to stop after one iteration
+            self.service._is_shutdown.set()
+            
+            with patch('time.sleep') as mock_sleep:
+                self.service.start()
+                
+                mock_scheduler.tick.assert_called()
+
+    def test_sync(self):
+        """Test sync method."""
+        with patch.object(self.service, 'scheduler') as mock_scheduler:
+            self.service.sync()
+            
+            mock_scheduler.close.assert_called_once()
+            self.assertTrue(self.service._is_stopped.is_set())
+
+    def test_stop(self):
+        """Test stop method."""
+        self.service.stop()
+        
+        self.assertTrue(self.service._is_shutdown.is_set())
+
+    def test_get_scheduler(self):
+        """Test get_scheduler method."""
+        scheduler = self.service.get_scheduler(lazy=True)
+        
+        self.assertIsInstance(scheduler, PersistentScheduler)
+
+    def test_scheduler_property(self):
+        """Test scheduler property."""
+        scheduler = self.service.scheduler
+        
+        self.assertIsInstance(scheduler, PersistentScheduler)
+
+
+class TestEmbeddedService(unittest.TestCase):
+    """Test EmbeddedService function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.app = Celery('test')
+
+    def test_threaded_service(self):
+        """Test EmbeddedService with thread=True."""
+        service = EmbeddedService(self.app, thread=True)
+        
+        self.assertIsInstance(service, _Threaded)
+
+    @unittest.skipIf(_Process is None, "multiprocessing not available")
+    def test_process_service(self):
+        """Test EmbeddedService with process."""
+        service = EmbeddedService(self.app, thread=False)
+        
+        self.assertIsInstance(service, _Process)
+
+
+class TestThreaded(unittest.TestCase):
+    """Test _Threaded class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.app = Celery('test')
+        self.threaded = _Threaded(self.app)
+
+    def test_run(self):
+        """Test run method."""
+        with patch.object(self.app, 'set_current') as mock_set_current:
+            with patch.object(self.threaded.service, 'start') as mock_start:
+                self.threaded.run()
+                
+                mock_set_current.assert_called_once()
+                mock_start.assert_called_once()
+
+    def test_stop(self):
+        """Test stop method."""
+        with patch.object(self.threaded.service, 'stop') as mock_stop:
+            self.threaded.stop()
+            
+            mock_stop.assert_called_once_with(wait=True)
+
+
+@unittest.skipIf(_Process is None, "multiprocessing not available")
+class TestProcess(unittest.TestCase):
+    """Test _Process class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.app = Celery('test')
+        self.process = _Process(self.app)
+
+    def test_run(self):
+        """Test run method."""
+        with patch('celery.beat.reset_signals') as mock_reset:
+            with patch('celery.beat.platforms.close_open_fds') as mock_close:
+                with patch.object(self.app, 'set_default') as mock_set_default:
+                    with patch.object(self.app, 'set_current') as mock_set_current:
+                        with patch.object(self.process.service, 'start') as mock_start:
+                            self.process.run()
+                            
+                            mock_reset.assert_called_once()
+                            mock_close.assert_called_once()
+                            mock_set_default.assert_called_once()
+                            mock_set_current.assert_called_once()
+                            mock_start.assert_called_once_with(embedded_process=True)
+
+    def test_stop(self):
+        """Test stop method."""
+        with patch.object(self.process.service, 'stop') as mock_stop:
+            with patch.object(self.process, 'terminate') as mock_terminate:
+                self.process.stop()
+                
+                mock_stop.assert_called_once()
+                mock_terminate.assert_called_once()
+
+
+class TestEvaluateEntryFunctions(unittest.TestCase):
+    """Test _evaluate_entry_args and _evaluate_entry_kwargs functions."""
+
+    def test_evaluate_entry_args_with_lazy_func(self):
+        """Test _evaluate_entry_args with BeatLazyFunc."""
+        mock_func = Mock(return_value="lazy_result")
+        lazy_func = BeatLazyFunc(mock_func)
+        
+        args = ["normal_arg", lazy_func, "another_arg"]
+        result = _evaluate_entry_args(args)
+        
+        expected = ["normal_arg", "lazy_result", "another_arg"]
+        self.assertEqual(result, expected)
+        mock_func.assert_called_once()
+
+    def test_evaluate_entry_args_empty(self):
+        """Test _evaluate_entry_args with empty args."""
+        result = _evaluate_entry_args(None)
+        self.assertEqual(result, [])
+        
+        result = _evaluate_entry_args([])
+        self.assertEqual(result, [])
+
+    def test_evaluate_entry_kwargs_with_lazy_func(self):
+        """Test _evaluate_entry_kwargs with BeatLazyFunc."""
+        mock_func = Mock(return_value="lazy_result")
+        lazy_func = BeatLazyFunc(mock_func)
+        
+        kwargs = {"normal_key": "normal_value", "lazy_key": lazy_func}
+        result = _evaluate_entry_kwargs(kwargs)
+        
+        expected = {"normal_key": "normal_value", "lazy_key": "lazy_result"}
+        self.assertEqual(result, expected)
+        mock_func.assert_called_once()
+
+    def test_evaluate_entry_kwargs_empty(self):
+        """Test _evaluate_entry_kwargs with empty kwargs."""
+        result = _evaluate_entry_kwargs(None)
+        self.assertEqual(result, {})
+        
+        result = _evaluate_entry_kwargs({})
+        self.assertEqual(result, {})
+
+
+class TestSchedulingError(unittest.TestCase):
+    """Test SchedulingError exception."""
+
+    def test_scheduling_error(self):
+        """Test SchedulingError can be raised and caught."""
+        with self.assertRaises(SchedulingError):
+            raise SchedulingError("Test error message")
+
+
+if __name__ == '__main__':
+    unittest.main()
 """The periodic task scheduler."""
 
 import copy
